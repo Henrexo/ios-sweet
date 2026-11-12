@@ -16,6 +16,9 @@
 # cryptex shared cache (ignition_level=1 looks there), and
 # /private/var/keybags/systembag.kb is the plain-plist system keybag that
 # keybagd reads with /defaults/no-effaceable-storage (tools/mkadt.py).
+# APFS_FUSE=/path/to/apfs-fuse overrides the binary: it must support LZBITMAP
+# (upstream sgan81/apfs-fuse >= 2023-01; Fedora's 2020 snapshot gives EIO on
+# ~137k files of the 16.7.16 OS image).
 set -euo pipefail
 
 [[ $# -ge 4 ]] || { sed -n '2,12p' "$0"; exit 2; }
@@ -64,7 +67,7 @@ apfs_mount() {
 	ln -s "$1" "$work/$2.dmg"
 	mkdir "$work/$2"
 	# As root: a user's FUSE mount is unreadable to the root rsync below.
-	sudo "$(command -v apfs-fuse)" "$work/$2.dmg" "$work/$2"
+	sudo "${APFS_FUSE:-$(command -v apfs-fuse)}" "$work/$2.dmg" "$work/$2"
 	mounts+=("$work/$2")
 }
 apfs_mount "$os" os
