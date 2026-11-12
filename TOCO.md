@@ -87,6 +87,19 @@ Consequences:
   [guess] lsd builds its database on first boot (CPU only) or is stuck. Not described in NOTES.md for sweet.
 - Boot 3 (22:19:31, shim-boot-toco3.img): same args + `sweetsample=SpringBoard,lsd sweetnull=backboardd,lsd`.
 
+## Boot 3 analysis (logs/toco-boot3.txt) [obs]
+- lsd completely static over 5 samples. Symbolicated (lsd slide 0x1f4c000):
+  t3 `__LAUNCH_SERVICES_CLIENTS_ARE_WAITING_FOR_THE_DATABASE_TO_FINISH_SEEDING__` (XPC from SpringBoard),
+  t0 `-[_LSInstallProgressService performJournalRecovery]` (dispatch_sync), t2 `restoreInactiveInstalls` (group wait),
+  t1 semaphore wait in libMobileGestalt <- `_GenerateBuiltInAppInstallSessionID` <- `+[MIInstallationIdentity
+  installationIdentityForBundle:settingIfNotSet:error:]` <- `-[MIInstalledInfoGatherer _populatePlaceholderRecordValues:...]`.
+- `_GenerateBuiltInAppInstallSessionID` = `MGCopyAnswer(@"re6Zb+zwFKJNlkQTUeT+/w")` = **UniqueDeviceID**.
+- Our ADT has none of the syscfg identity iBoot fills into the D22AP template (root serial-number,
+  mlb-serial-number, model-number, region-info; /chosen mac-address-bluetooth0/ethernet0).
+  [guess] UDID computation blocks on one of those.
+- Fix attempt (mkadt --toco): synthetic serial-number TOCO00000001, mlb TOCOMLB000000001, model MQAC2, region LL/A,
+  /chosen mac-address-wifi0/bluetooth0/ethernet0 02:54:f0:c0:00:01..03. Boot 4 at 22:35:25 (shim-boot-toco4.img).
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.

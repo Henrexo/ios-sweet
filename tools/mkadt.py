@@ -35,6 +35,29 @@ SWEET_ECID = 0x5357454554000001  # 'SWEET' + 1, synthetic
 FB_W, FB_H, FB_STRIDE = 1080, 2400, 1080 * 4
 if '--toco' in sys.argv:
     FB_H = 2340  # toco panel; must match the shim's SHIM_FB_H
+
+# --toco: synthetic syscfg identity that iBoot normally fills into the
+# D22AP template (root serial-number/mlb-serial-number/model-number/
+# region-info, /chosen mac-address-*). Without them lsd hangs on first boot:
+# MobileInstallation's _GenerateBuiltInAppInstallSessionID asks MobileGestalt
+# for UniqueDeviceID (re6Zb+zwFKJNlkQTUeT+/w), which blocks on a semaphore
+# forever, so LaunchServices never finishes seeding and SpringBoard waits
+# (TOCO.md, boot 3). Not the phone's identifiers; locally administered MACs.
+def _pad(s, n=0x20):
+    return s.encode().ljust(n, b'\0')
+TOCO_ROOT_IDS, TOCO_CHOSEN_IDS = [], []
+if '--toco' in sys.argv:
+    TOCO_ROOT_IDS = [
+        ('serial-number', _pad('TOCO00000001')),
+        ('mlb-serial-number', _pad('TOCOMLB000000001')),
+        ('model-number', _pad('MQAC2')),
+        ('region-info', _pad('LL/A')),
+    ]
+    TOCO_CHOSEN_IDS = [
+        ('mac-address-wifi0', bytes.fromhex('0254f0c00001')),
+        ('mac-address-bluetooth0', bytes.fromhex('0254f0c00002')),
+        ('mac-address-ethernet0', bytes.fromhex('0254f0c00003')),
+    ]
 # Internal UFS host (ufshc@1d84000 "ufs_mem"); QEMU virt has none
 UFS, UFS_SIZE = 0x01d84000, 0x3000
 TIMEBASE = 19200000
@@ -125,7 +148,7 @@ def build(seed=None, qemu=False, highmem=False):
         ('effective-production-status-ap', u32(0)),
         ('certificate-security-mode', u32(1)),
         ('effective-security-mode-sep', u32(1)),
-    ], [node('memory-map', [ph()]),
+    ] + TOCO_CHOSEN_IDS, [node('memory-map', [ph()]),
         # Local boot policy (kern_csr.c): SIP relaxed like `csrutil disable`
         # (lp-sip0: untrusted kexts, unrestricted FS, task_for_pid, kernel
         # debugger, dtrace, nvram), lp-sip1: unauthenticated (unsealed) root.
@@ -242,7 +265,7 @@ def build(seed=None, qemu=False, highmem=False):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons, pram] + product + ([] if qemu else [ufs]))
+    ] + TOCO_ROOT_IDS, [chosen, defaults, cpus, arm_io, fbcon, buttons, pram] + product + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':
