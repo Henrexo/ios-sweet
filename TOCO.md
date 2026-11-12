@@ -76,6 +76,17 @@ Consequences:
 - Boot `shim/out/shim-boot-toco2.img` (cmdline = README full args + `sweettouch=0`, cpus=6) at 22:07:05:
   **Apple logo visible** (user report).
 
+## Boot 2 analysis (log logs/toco-boot2.txt, pulled via TWRP after ~10 min on the Apple logo) [obs]
+- 6/6 CPUs up, UFS read-write, sweetlog active, `SWEET FB: display on`, 7 swaps (boot logo). Keys work unchanged
+  (power = key0 -> HID 0x30, vol-up = key1 -> 0xe9). Only crash: driverkitd (sig 9). bluetoothd/fairplayd relaunch loop.
+- SpringBoard main thread identical in all 6 samples (>= 7.5 min, sampler every 90 s), symbolicated
+  (ipsw dyld a2s, slide 0x27208000): __ulock_wait <- os_unfair_lock_lock_slow <- _LSContextInitCommon <-
+  -[LSApplicationRecord initWithBundleIdentifier:allowPlaceholder:error:] <- -[CCSModuleRepository
+  _queue_filterModuleMetadataByAssociatedBundleAvailability:] <- -[CCSModuleRepository _initWithDirectoryURLs:...].
+  Another SpringBoard thread is inside _LSContextInitCommon (XPC to lsd). lsd exec 1x, no crash.
+  [guess] lsd builds its database on first boot (CPU only) or is stuck. Not described in NOTES.md for sweet.
+- Boot 3 (22:19:31, shim-boot-toco3.img): same args + `sweetsample=SpringBoard,lsd sweetnull=backboardd,lsd`.
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
