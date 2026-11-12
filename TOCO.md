@@ -100,6 +100,18 @@ Consequences:
 - Fix attempt (mkadt --toco): synthetic serial-number TOCO00000001, mlb TOCOMLB000000001, model MQAC2, region LL/A,
   /chosen mac-address-wifi0/bluetooth0/ethernet0 02:54:f0:c0:00:01..03. Boot 4 at 22:35:25 (shim-boot-toco4.img).
 
+## MILESTONE: iOS lock screen on toco (boot 4, 2026-11-12 ~22:37 local) [obs]
+- shim-boot-toco4.img (mkadt --highmem --toco incl. synthetic serial/MAC identity), image ios16-root-toco.
+- Photo PXL_20261112_213713355.jpg: lock screen "Wednesday, December 31" 4:01, charging icon, camera button.
+  ~2 min after `fastboot boot` (first boots without the identity props hung >10 min in lsd).
+- => the UniqueDeviceID/identity fix resolved the LaunchServices seeding hang.
+- Not working yet: touch (ST FTS, sweettouch=0), wall clock (no RTC), panel height 2400 hardcoded in 0058/0061.
+
+## Next
+1. Touch: ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
+2. Panel height from ADT in 0061/0058 (2340).
+3. Optional: RTC (PM6150 RTC over SPMI) for the clock.
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
