@@ -107,8 +107,16 @@ Consequences:
 - => the UniqueDeviceID/identity fix resolved the LaunchServices seeding hang.
 - Not working yet: touch (ST FTS, sweettouch=0), wall clock (no RTC), panel height 2400 hardcoded in 0058/0061.
 
+## Touch driver (patch 0082) [2026-11-12]
+- Live DT (TWRP): fts@49 on i2c@a84000 (SE7), pins gpio6/7 qup11, reset gpio8, irq gpio9 = same as sweet.
+  vdd-supply = TLMM GPIO72 fixed reg "disp_vddio_vreg" (shared with panel VDDIO -> never toggled),
+  avdd-supply = L6C (rpmh ldoc6, pm6150l_l6, 1.65..3.1 V, = vddpx_2 SD I/O); mainline uses 3.0..3.1 V -> 3000 mV.
+- Protocol from MiCode/Xiaomi_Kernel_OpenSource toco-q-oss drivers/input/touchscreen/fts_521 (research/xiaomi-fts).
+- 0082: sweet_touch.c gets a TOUCH_STFTS path behind boot-arg `sweettouchfts=1` (sweet unchanged);
+  sweet_rpmh.c also accepts ldoc6 3000..3100 mV. Host syntax check with stub headers clean. CI run 43313281817.
+
 ## Next
-1. Touch: ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
+1. Touch (in progress, see above): ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
 2. Panel height from ADT in 0061/0058 (2340).
 3. Optional: RTC (PM6150 RTC over SPMI) for the clock.
 
