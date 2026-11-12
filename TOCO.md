@@ -115,6 +115,20 @@ Consequences:
 - 0082: sweet_touch.c gets a TOUCH_STFTS path behind boot-arg `sweettouchfts=1` (sweet unchanged);
   sweet_rpmh.c also accepts ldoc6 3000..3100 mV. Host syntax check with stub headers clean. CI run 43313281817.
 
+## BLOCKER since ~22:55: ABL fastboot downloads fail [obs 2026-11-12 23:15]
+- Kernel with 0082 built (CI 43313281817, xnu/out-0082), image shim/out/shim-boot-toco5.img (sweettouchfts=1) - never booted.
+- Symptoms: getvar answers random (`product: toco` / 'unknown command' / 'GetVar Variable Not found',
+  ~5-10 % wrong, mostly first queries after a pause); `fastboot boot` and even `fastboot stage` of 1 MB hang in the
+  data phase. `fastboot reboot bootloader` once landed in TWRP. adb in TWRP works (4 MiB log pull fine).
+- Ruled out: battery (51 %, charging), partitions (all backed-up partitions identical except modemst1/2 =
+  valid EFS written by the modem under Android, persist = clean ext4, mount count 48->57 from Android/TWRP),
+  misc BCB empty, cable/plug orientation, both laptop ports, host autosuspend (power/control=on did not fix;
+  udev rule /etc/udev/rules.d/51-fastboot-nosuspend.rules did not apply on replug), ModemManager (no log),
+  phone cold boot, no host package changes since 20:30.
+- Started right after a background loop polled `fastboot getvar` every 3 s while ABL came up (22:55).
+  Lesson: no polling loops against ABL/adb while booting.
+- Next: reboot the PC (xhci state after the -71 error storm), then retry `fastboot stage` 1 MB, then boot toco5.
+
 ## Next
 1. Touch (in progress, see above): ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
 2. Panel height from ADT in 0061/0058 (2340).
