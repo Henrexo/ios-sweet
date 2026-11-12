@@ -63,6 +63,19 @@ Consequences:
   (userdata still holds Android).
 - => CPU, RAM (highmem), GIC IRQs, timer, framebuffer, UFS identical to sweet in practice.
 
+## Root image + first iOS boot [obs 2026-11-12]
+- Fedora's apfs-fuse (snapshot 2020-09-28) has no LZBITMAP: rsync got EIO on 136785 files of the 16.7.16 OS image.
+  Built upstream sgan81/apfs-fuse 66b86bd (2023-03, LZBITMAP since d24adbe) with GCC 16
+  (`cmake -DUSE_FUSE3=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_CXX_FLAGS='-include cstdint'`)
+  -> ~/.local/bin/apfs-fuse-lzbitmap, used via `APFS_FUSE=` (tools/mkiosroot.sh). 0 read errors.
+- mkiosroot's final `fsck.hfsplus -f -n` reported "Volume header needs minor repair" (exit 8) right after a
+  successful -y repair; after tweaks + `fsck -fy` the volume "appears to be OK". Used 12G of 16G, simg 12.1 GB.
+- sweet-root-tweaks: "warning: no mobileactivationd system container in the image; skipped data ark".
+- Flash: `-S 512M` -> ABL hung on block 1/24 (no OKAY). After a forced restart, `-S 256M`: 47/47 OKAY in 303 s.
+  ABL hung again afterwards (getvar timeout); the forced restart gave USB enumeration errors (-71) until replug.
+- Boot `shim/out/shim-boot-toco2.img` (cmdline = README full args + `sweettouch=0`, cpus=6) at 22:07:05:
+  **Apple logo visible** (user report).
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
