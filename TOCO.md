@@ -129,6 +129,13 @@ Consequences:
   Lesson: no polling loops against ABL/adb while booting.
 - Next: reboot the PC (xhci state after the -71 error storm), then retry `fastboot stage` 1 MB, then boot toco5.
 
+- 23:2x after PC reboot + new cable: `fastboot stage` 1 MB still hangs; ABL then crashed/rebooted into charger mode
+  (05c6:f000). Host logs no USB errors -> phone-side ABL problem, cause unknown.
+- WORKAROUND (user approved, deviates from CLAUDE.md "never flash shim"): shim written to `boot` from TWRP
+  (`dd of=/dev/block/by-name/boot`, sha256 verified). Normal power-on boots iOS. Restore: dd backup/boot.img
+  (sha 2bebd50a…, verified identical to device before the write). TWRP (recovery partition) untouched.
+- 23:23:31 boot of shim-boot-toco5.img (touch 0082, sweettouchfts=1) from boot partition.
+
 ## Next
 1. Touch (in progress, see above): ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
 2. Panel height from ADT in 0061/0058 (2340).
