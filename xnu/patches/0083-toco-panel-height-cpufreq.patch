@@ -1,0 +1,203 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -111,6 +111,7 @@
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/sweet_cpufreq.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff -ruN a/bsd/dev/sweet_cpufreq.c b/bsd/dev/sweet_cpufreq.c
+--- /dev/null
++++ b/bsd/dev/sweet_cpufreq.c
+@@ -0,0 +1,118 @@
++/*
++ * SWEET/toco CPU frequency: Qualcomm OSM "cpufreq-hw" (SM7150 DT
++ * cpufreq@18323000, freq-domain0 = cpu0-5 A55, freq-domain1 = cpu6-7 A76).
++ * Register layout as Linux drivers/cpufreq/qcom-cpufreq-hw.c (v1 / OSM):
++ *   0x000 enable, 0x110 + 32*i frequency LUT, 0x114 + 32*i voltage LUT,
++ *   0x920 desired performance state (LUT index).
++ * LUT row: src = bits 31:30 (0 = GPLL0 path 300 MHz, else XO * lval),
++ * lval = bits 7:0, core count = bits 18:16. The table ends where a row
++ * repeats the previous frequency. The OSM firmware handles voltage and
++ * hardware limits; we only pick an index, like Linux does.
++ *
++ * XNU has no cpufreq driver for this SoC, so the cores stay at whatever
++ * state ABL left. This logs the table and the inherited state, then asks
++ * for the highest entry not above a cap (boot-args, MHz):
++ *   sweetcpufreq=0       leave everything as ABL left it (log only)
++ *   sweetcpumhz0=N       cap for cpu0-5 (default 1709 = one step below max)
++ *   sweetcpumhz1=N       cap for cpu6-7 (default 1940)
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_cpufreq_init(void);
++
++#define OSM_ENABLE      0x000u
++#define OSM_FREQ_LUT    0x110u
++#define OSM_VOLT_LUT    0x114u
++#define OSM_PERF_STATE  0x920u
++#define OSM_ROW         32u
++#define OSM_ROWS        40u
++#define OSM_XO_KHZ      19200u
++#define OSM_ALT_KHZ     300000u
++
++static uint32_t
++cf_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++cf_wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static void
++cf_domain(unsigned dom, vm_offset_t pa, unsigned cap_mhz, int set)
++{
++	/* 16K pages: map the aligned window that holds [pa, pa + 0x1400). */
++	vm_offset_t win = pa & ~(vm_offset_t)0x3fff;
++	vm_size_t len = ((pa - win) + 0x1400 + 0x3fff) & ~(vm_size_t)0x3fff;
++	vm_offset_t map = ml_io_map(win, len);
++	vm_offset_t base = map ? map + (pa - win) : 0;
++	if (!base) {
++		printf("SWEET CPUFREQ: domain %u map failed\n", dom);
++		return;
++	}
++	uint32_t enable = cf_rd(base, OSM_ENABLE);
++	uint32_t cur = cf_rd(base, OSM_PERF_STATE) & 0xffu;
++	printf("SWEET CPUFREQ: domain %u pa=%#lx enable=%#x perf_state=%u\n",
++	    dom, (unsigned long)pa, enable, cur);
++	if (!(enable & 1u)) {
++		printf("SWEET CPUFREQ: domain %u not enabled by firmware; leaving it alone\n", dom);
++		return;
++	}
++	unsigned n = 0, pick = 0, prev = 0;
++	unsigned khz[OSM_ROWS];
++	for (unsigned i = 0; i < OSM_ROWS; ++i) {
++		uint32_t f = cf_rd(base, OSM_FREQ_LUT + i * OSM_ROW);
++		uint32_t v = cf_rd(base, OSM_VOLT_LUT + i * OSM_ROW);
++		unsigned src = (f >> 30) & 3u, lval = f & 0xffu, cores = (f >> 16) & 7u;
++		unsigned k = src ? lval * OSM_XO_KHZ : OSM_ALT_KHZ;
++		if (i > 0 && k == prev) {
++			break;
++		}
++		printf("SWEET CPUFREQ: domain %u lut[%u] %u kHz cores=%u volt=%#x%s\n",
++		    dom, i, k, cores, v, i == cur ? " <- current" : "");
++		khz[i] = k;
++		prev = k;
++		n = i + 1;
++		if (k <= cap_mhz * 1000u) {
++			pick = i;
++		}
++	}
++	if (!n) {
++		printf("SWEET CPUFREQ: domain %u empty table\n", dom);
++		return;
++	}
++	if (cur < n) {
++		printf("SWEET CPUFREQ: domain %u inherited %u kHz\n", dom, khz[cur]);
++	}
++	if (!set || pick == cur) {
++		return;
++	}
++	cf_wr(base, OSM_PERF_STATE, pick);
++	printf("SWEET CPUFREQ: domain %u request lut[%u] = %u kHz (cap %u MHz), readback %u\n",
++	    dom, pick, khz[pick], cap_mhz, cf_rd(base, OSM_PERF_STATE) & 0xffu);
++}
++
++void
++sweet_cpufreq_init(void)
++{
++	int set = 1;
++	unsigned cap0 = 1709, cap1 = 1940;
++	(void)PE_parse_boot_argn("sweetcpufreq", &set, sizeof(set));
++	(void)PE_parse_boot_argn("sweetcpumhz0", &cap0, sizeof(cap0));
++	(void)PE_parse_boot_argn("sweetcpumhz1", &cap1, sizeof(cap1));
++	cf_domain(0, 0x18323000, cap0, set);
++	cf_domain(1, 0x18325800, cap1, set);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff -ruN a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -53,6 +53,7 @@
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
++extern void sweet_cpufreq_init(void);
+ 
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -660,6 +661,7 @@
+ 	sweet_keys_init();
+ 	sweet_touch_init();
+ 	sweet_usb_probe();
++	sweet_cpufreq_init();
+ 	return 0;
+ }
+ 
+diff -ruN a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -367,7 +367,7 @@
+ 	virtual UInt32 getProductID() APPLE_KEXT_OVERRIDE { return 2; }
+ private:
+ 	IOLock *fLock;
+-	int fLogicalW, fLogicalH, fOffX, fOffY;
++	int fLogicalW, fLogicalH, fOffX, fOffY, fPanelH;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -434,10 +434,19 @@
+ 	}
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
++	/* Panel height from the boot framebuffer (sweet 2400, toco 2340), like
++	 * SweetFramebuffer.cpp, so touch, display offset and edge agree. */
++	PE_Video video = {};
++	fPanelH = 2400;
++	if (PE_current_console(&video) == 0 && video.v_height >= 2000 && video.v_height <= 2400) {
++		fPanelH = (int)video.v_height;
++	}
+ 	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
++	fLogicalH = native ? fPanelH : 2436;
+ 	fOffX = (fLogicalW - 1080) / 2;
+-	fOffY = (fLogicalH - 2400) / 2;
++	fOffY = (fLogicalH - fPanelH) / 2;
++	IOLog("SWEET HID: touch panel 1080x%d, logical %dx%d, offset %d,%d\n",
++	    fPanelH, fLogicalW, fLogicalH, fOffX, fOffY);
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
+@@ -459,7 +468,7 @@
+ 		return;
+ 	}
+ 	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	y = y < 0 ? 0 : (y > fPanelH - 1 ? fPanelH - 1 : y);
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+@@ -473,7 +482,7 @@
+ 	}
+ 	if (!was && down) {
+ 		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		    y < SWEET_TOUCH_EDGE_PX || y > fPanelH - 1 - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
