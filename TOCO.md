@@ -144,6 +144,17 @@ Consequences:
   boot partition (written from TWRP). Lock screen -> swipe up works.
 - Boot args for toco now: README full args minus sweettouch=0, plus `sweettouchfts=1`.
 
+## Boots 7+8: 8 cores, cpufreq, home gesture (2026-11-12/13) [obs]
+- Boot 7 (cpus=8, shim-boot-toco7.img): `SWEET CPU: 8/8 CPUs initialized`; user: "maybe a bit faster".
+- Patch 0083 (CI 43324296067, xnu/out-0083, shim-boot-toco8.img, cpus=8 sweettouchfts=1):
+  * SweetHID panel height from PE_current_console: `touch panel 1080x2340, logical 1125x2436, offset 22,48`.
+    Before: bottom-edge test y > 2351 never true on toco (max 2339) -> no FromEdgeTip -> no home gesture.
+    **User: home gesture works now.**
+  * OSM cpufreq (logs/toco-boot8.txt): ABL leaves A55 domain at lut[6] 1497.6 MHz and the **A76 domain at
+    lut[0] 300 MHz**. LUT A55: 300..1804.8 MHz (10 rows), A76: 300..2208 MHz (13 rows). Requested
+    A55 1708.8 MHz (lut 8), A76 1939.2 MHz (lut 10), readback ok. User: "a bit faster".
+- Remaining slowness = CPU rendering (no GPU, no hardware acceleration feasible: iOS needs AGX/Metal).
+
 ## Next
 1. ~~Touch~~ DONE (0082). Old notes: ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
 2. Panel height from ADT in 0061/0058 (2340).
