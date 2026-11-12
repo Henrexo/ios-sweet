@@ -13,7 +13,15 @@ set -euo pipefail
 dir=$1 out=$2 size=${3:-16G} owner=${4:-${SUDO_USER:-root}}
 here=$(cd "$(dirname "$0")" && pwd)
 
-"$here/mkiosroot.sh" "$dir/087-86698-044.dmg" "$dir/087-86593-047.dmg" "$dir/087-86715-047.dmg" "$out.img" "$size"
+# Resume: an existing OUT_PREFIX.img from an earlier run is reused (mkiosroot's
+# final read-only fsck can report "Volume header needs minor repair" with the
+# Linux fsck_hfs 540.1 even right after a successful -y repair -> exit 8).
+if [[ -e $out.img ]]; then
+	echo "reusing existing $out.img"
+else
+	"$here/mkiosroot.sh" "$dir/087-86698-044.dmg" "$dir/087-86593-047.dmg" "$dir/087-86715-047.dmg" "$out.img" "$size" || true
+	[[ -e $out.img ]] || exit 1
+fi
 fsck.hfsplus -fy "$out.img" | tail -3
 mnt=$(mktemp -d)
 mount -t hfsplus -o loop,force "$out.img" "$mnt"
