@@ -30,6 +30,23 @@ Consequences:
 - Touch needs a new ST FTS protocol driver (patch 0063 is Goodix-only) and a GPIO-based rail instead of RPMh LDO11.
   First boots: `sweettouch=0`.
 
+## Live measurements (TWRP recovery, adb root) [obs 2026-11-12]
+- Recovery partition holds TWRP for toco (product twrp_toco, eng build, adb root). No OrangeFox needed.
+- Backup: 14 partitions in backup/, SHA-256 verified against the device (backup/SHA256SUMS).
+- /proc/iomem System RAM: 80000000-856fffff, 97f17000-9e3fffff, a1600000-aeffffff, b0000000-1fcbfffff.
+  DT memory node = <0x80000000 +2G, 0x100000000 +0xfcc00000>: **identical to sweet** -> mkadt --highmem values unchanged.
+  rmtfs is dynamically placed (reg = size only) on this firmware; with no Linux/modem running it is irrelevant for the shim.
+- Splash (sde_kms): 0x9c000000 size 0x1700000, identical to sweet.
+- Panel: `dsi_xiaomi_f4_41_06_0a_fhd_cmd_display` = **command mode** (sweet: DSC video mode).
+- Touch: **ST FTS at 1-0049 is the live controller**; GT9886 probe "i2c test FAILED". FTS: irq GPIO9, reset GPIO8.
+- PixelOS boot.img: header v2, one generic SDMMAGPIE dtb (board-id 0), os_version 15.0.0; toco overlay comes from dtbo.
+
+## Hardware test 1: shim without payload [obs 2026-11-12]
+- `SHIM_FB_H=2340 shim/build.sh` + `fastboot boot shim/out/shim-boot.img`: ABL boots it, **red screen with text visible**
+  -> fb writes show on the command-mode panel without any MDP kick (ABL leaves autorefresh on) [guess for the mechanism].
+- UFS probe (read-only) works unchanged: ver 0x210, LUN0 lastlba 0x1D7D7FF blk 0x1000, GPT ok.
+  userdata lba 0x2B8200, 0x1AC55 MiB (~107 GiB). XNU patch 0028 finds userdata by GPT name -> fine.
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
