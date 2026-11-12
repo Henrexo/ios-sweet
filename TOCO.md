@@ -47,6 +47,22 @@ Consequences:
 - UFS probe (read-only) works unchanged: ver 0x210, LUN0 lastlba 0x1D7D7FF blk 0x1000, GPT ok.
   userdata lba 0x2B8200, 0x1AC55 MiB (~107 GiB). XNU patch 0028 finds userdata by GPT name -> fine.
 
+## CI [obs 2026-11-12]
+- macos-14 runner retired; xnu.yml now takes input `runner` (default macos-15). Run 43296813137 on macos-15 picked
+  the oldest Xcode (16.0, 16A242d) and **succeeded**: all 81 patches applied, no compile errors, iig .cpp compiled.
+  (NOTES.md says Xcode 16 iig is incompatible; not observed here - DriverKit RPC paths are untested on device.)
+
+## Hardware test 2: first XNU boot (milestone 1 reached) [obs 2026-11-12]
+- Image: upstream kernel (run 43296813137) + `mkadt --highmem --toco` + shim SHIM_FB_H=2340,
+  cmdline `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 wdt=-1
+  wdt_test=no_user_checkin sweettouch=0 sweetkeys=0` (no ufsrw -> userdata untouched).
+- Kernel console on screen; boots through IOKit/BSD: `SWEET FB: AppleCLCD 1080x2340 stride 4320 at 0x9c000000,
+  presented as 1125x2436`, `SWEET CPU: 1/1 CPUs initialized, SGI1 verified`, Skywalk self-tests PASSED,
+  `SWEET UFS: "userdata" on LUN 0: first block 0x2b8200, 109653 MiB, read-only`, DWC3/QUSB2 registers readable.
+- Root mount loops as expected: `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature`, `mount(N) failed`
+  (userdata still holds Android).
+- => CPU, RAM (highmem), GIC IRQs, timer, framebuffer, UFS identical to sweet in practice.
+
 ## Open
 - Recovery with adb root for toco (backup + /proc/iomem + live DTB).
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
