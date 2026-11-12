@@ -19,8 +19,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 if [[ -e $out.img ]]; then
 	echo "reusing existing $out.img"
 else
-	"$here/mkiosroot.sh" "$dir/087-86698-044.dmg" "$dir/087-86593-047.dmg" "$dir/087-86715-047.dmg" "$out.img" "$size" || true
-	[[ -e $out.img ]] || exit 1
+	"$here/mkiosroot.sh" "$dir/087-86698-044.dmg" "$dir/087-86593-047.dmg" "$dir/087-86715-047.dmg" "$out.img" "$size" || rc=$?
+	[[ ${rc:-0} == 0 || ${rc:-0} == 8 ]] || { echo "mkiosroot failed ($rc)" >&2; exit 1; }
 fi
 fsck.hfsplus -fy "$out.img" | tail -3
 mnt=$(mktemp -d)
