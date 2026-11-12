@@ -52,3 +52,14 @@ Consequences:
 - Which touch variant this unit has (FTS vs Goodix): check `/sys/bus/i2c/devices` / dmesg.
 - CI: GitHub retired the `macos-14` runner (run 43296208733: "configuration 'macos-14-arm64-us-default' is not supported").
   Workflow needs an Xcode 15.x iig; check what macos-15 offers.
+- Kernel hardcodes panel height 2400 in 0061 (IOMFB logical size/offset) and 0058 (touch Y normalisation).
+  Fine for milestone 1 (rows 2340..2399 land inside the 0x1700000 splash region, just invisible); must come
+  from the ADT `height` before the GUI milestone.
+- First XNU boot without `ufsrw=1`: sweet_ufs is read-only, sweetlog thread does not start -> userdata untouched.
+
+## Build recipe (toco)
+```sh
+python3 tools/mkadt.py shim/out/toco.adt --highmem --toco
+python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/toco.adt shim/out/payload.bin --cmdline '...'
+SHIM_FB_H=2340 shim/build.sh ../shim/out/payload.bin
+```
