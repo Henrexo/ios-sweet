@@ -67,7 +67,7 @@ diff -ru a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	uint32_t irq_status, irq_last, active;
  	unsigned sent, got;
  	int x[TOUCH_MAX], y[TOUCH_MAX];
-@@ -487,6 +507,157 @@
+@@ -487,6 +507,163 @@
  	return 0;
  }
  
@@ -112,15 +112,21 @@ diff -ru a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	    e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
 +}
 +
-+/* Power, reset and sense-on. vdd (TLMM GPIO72 "disp_vddio_vreg") is shared with
-+ * the panel and already on: never touched here. */
++/* Power, reset and sense-on. vdd = TLMM GPIO72 fixed regulator (live DT
++ * "touch_vddio_vreg", mainline vreg_touch_vdd: enable-active-high,
++ * startup 4 ms, vin L10A 1.8 V). Boot 5 showed it LOW after ABL (NACK at
++ * 0x49): drive it high before avdd, like fts_521 enables vdd then avdd. */
 +static bool
 +touch_stfts_start(void)
 +{
 +	uint8_t ev[STFTS_EVT_SIZE * 32];
 +	unsigned n = 0;
 +	touch_gpio(9, 0, 3, 3, false, false); /* IRQ input, 8 mA, pull-up (ts_active) */
-+	touch_gpio(8, 0, 3, 3, true, false);  /* hold in reset while avdd settles */
++	touch_gpio(8, 0, 3, 3, true, false);  /* hold in reset while the rails settle */
++	touch_gpio(72, 0, 0, 0, true, true);  /* vdd enable, 2 mA push-pull */
++	touch_wait(10);                       /* > 4 ms startup-delay-us */
++	printf("SWEET TOUCH: vdd72 io=%#x cfg=%#x\n", touch_rd(st.gpio, TOUCH_GPIO_IO(72)),
++	    touch_rd(st.gpio, TOUCH_GPIO_CFG(72)));
 +	int power_error = sweet_rpmh_vreg_enable("ldoc6", 3000);
 +	if (power_error) {
 +		printf("SWEET TOUCH: L6C RPMh enable failed %d; stopping\n", power_error);
@@ -225,7 +231,7 @@ diff -ru a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  static bool
  touch_se_init(void)
  {
-@@ -569,6 +740,33 @@
+@@ -569,6 +746,33 @@
  	if (!touch_clocks() || !touch_se_init()) {
  		goto out;
  	}
@@ -259,7 +265,7 @@ diff -ru a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x vdd90=%#x; voting L11C through RPMh\n",
  	    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
  	    touch_rd(st.gpio, TOUCH_GPIO_IO(90)));
-@@ -646,6 +844,7 @@
+@@ -646,6 +850,7 @@
  	st.started = true;
  	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
  	(void)PE_parse_boot_argn("sweettouchirq", &st.irq_hint, sizeof(st.irq_hint));
