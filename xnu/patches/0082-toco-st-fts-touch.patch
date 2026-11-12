@@ -1,0 +1,269 @@
+diff -ru a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -320,16 +320,20 @@
+ 		return EIO;
+ 	}
+ 	rh_poisoned = false;
+-	printf("SWEET RPMH: L11C ACTIVE vote complete (rail voltage requires hardware verification)\n");
++	printf("SWEET RPMH: LDO ACTIVE vote complete (rail voltage requires hardware verification)\n");
+ 	return 0;
+ }
+ 
+ int
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+-	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
++	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources.
++	 * sweet: L11C touch rail. toco: L6C (vddpx_2, ST FTS avdd; mainline
++	 * sm7150-xiaomi-common vreg_l6c_3p0 = 3000..3100 mV). */
++	bool ok = res && ((!strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400) ||
++	    (!strcmp(res, "ldoc6") && mv >= 3000 && mv <= 3100));
++	if (!ok) {
++		printf("SWEET RPMH: expected ldoc11 2950..3400 mV or ldoc6 3000..3100 mV\n");
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+diff -ru a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -31,7 +31,27 @@
+ #define TOUCH_GPIO_IO(n)  (TOUCH_GPIO_CFG(n) + 4u)
+ #define TOUCH_MAX        10u
+ #define TOUCH_GOODIX     1
+-#define TOUCH_FTS        2
++#define TOUCH_FTS        2   /* Focaltech 54:52 (sweet variant) */
++#define TOUCH_STFTS      3   /* ST FTM5 "fts_521" (toco), boot-arg sweettouchfts=1 */
++/*
++ * ST FTM5 over I2C (Xiaomi toco-q-oss drivers/input/touchscreen/fts_521,
++ * I2C_INTERFACE): address 0x49, FIFO read = write 0x86 then read 8-byte
++ * events (no dummy byte); event[7] & 0x1f = events still queued.
++ * Reset through TLMM GPIO8 (fts,reset-gpio-enable), then the FW queues
++ * EVT_ID_CONTROLLER_READY. Sense on = {0xA0 SCAN_MODE, 0x00 ACTIVE, 0x01}.
++ * Point events: id = e[1] >> 4, type = e[1] & 15,
++ * x = ((e[3] & 15) << 8) | e[2], y = (e[4] << 4) | (e[3] >> 4).
++ */
++#define STFTS_ADDR       0x49u
++#define STFTS_FIFO_READ  0x86u
++#define STFTS_EVT_SIZE   8u
++#define STFTS_EVT_READY  0x03u
++#define STFTS_EVT_ENTER  0x13u
++#define STFTS_EVT_MOTION 0x23u
++#define STFTS_EVT_LEAVE  0x33u
++#define STFTS_EVT_ERROR  0xf3u
++#define STFTS_X_MAX      1079u
++#define STFTS_Y_MAX      2339u
+ /* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
+ #define GOODIX_PID_REG   0x4022u
+ #define GOODIX_EVENT_REG 0x4180u
+@@ -74,7 +94,7 @@
+ static struct {
+ 	vm_offset_t se, gcc, gpio;
+ 	bool started, dead, probing;
+-	int kind, irq_hint;
++	int kind, irq_hint, stfts;
+ 	uint32_t irq_status, irq_last, active;
+ 	unsigned sent, got;
+ 	int x[TOUCH_MAX], y[TOUCH_MAX];
+@@ -487,6 +507,157 @@
+ 	return 0;
+ }
+ 
++/* Read up to max events (each 8 bytes) from the FTM5 FIFO; returns count. */
++static int
++touch_stfts_read(uint8_t *buf, unsigned max, unsigned *count)
++{
++	*count = 0;
++	int err = touch_read(STFTS_ADDR, STFTS_FIFO_READ, false, buf, STFTS_EVT_SIZE);
++	if (err) {
++		return err;
++	}
++	if (buf[0] == 0) {
++		return 0; /* EVT_ID_NOEVENT */
++	}
++	unsigned more = buf[7] & 0x1fu;
++	*count = 1;
++	/* RX is limited to 90 bytes per message: drain in chunks of 11 events. */
++	while (more && *count < max) {
++		unsigned n = more;
++		if (n > 11u) {
++			n = 11u;
++		}
++		if (n > max - *count) {
++			n = max - *count;
++		}
++		err = touch_read(STFTS_ADDR, STFTS_FIFO_READ, false,
++		    buf + *count * STFTS_EVT_SIZE, n * STFTS_EVT_SIZE);
++		if (err) {
++			return err;
++		}
++		*count += n;
++		more -= n;
++	}
++	return 0;
++}
++
++static void
++touch_stfts_log(const char *what, const uint8_t *e)
++{
++	printf("SWEET TOUCH: fts %s %02x %02x %02x %02x %02x %02x %02x %02x\n", what,
++	    e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
++}
++
++/* Power, reset and sense-on. vdd (TLMM GPIO72 "disp_vddio_vreg") is shared with
++ * the panel and already on: never touched here. */
++static bool
++touch_stfts_start(void)
++{
++	uint8_t ev[STFTS_EVT_SIZE * 32];
++	unsigned n = 0;
++	touch_gpio(9, 0, 3, 3, false, false); /* IRQ input, 8 mA, pull-up (ts_active) */
++	touch_gpio(8, 0, 3, 3, true, false);  /* hold in reset while avdd settles */
++	int power_error = sweet_rpmh_vreg_enable("ldoc6", 3000);
++	if (power_error) {
++		printf("SWEET TOUCH: L6C RPMh enable failed %d; stopping\n", power_error);
++		return false;
++	}
++	touch_wait(10);
++	touch_gpio(6, 1, 0, 0, false, false); /* qup11 SDA/SCL, 2 mA, no bias */
++	touch_gpio(7, 1, 0, 0, false, false);
++	/* fts_system_reset with reset GPIO: low 10 ms, high, poll for READY. */
++	touch_gpio(8, 0, 3, 3, true, false);
++	touch_wait(10);
++	touch_gpio(8, 0, 3, 3, true, true);
++	bool ready = false;
++	for (unsigned t = 0; t < 100 && !ready && !st.dead; ++t) {
++		touch_wait(20);
++		st.probing = t < 3; /* log the first transfers verbosely */
++		int err = touch_stfts_read(ev, 32, &n);
++		if (err) {
++			if (t % 10u == 0) {
++				printf("SWEET TOUCH: fts poll %u err=%d irq=%#x\n", t, err, st.irq_status);
++			}
++			continue;
++		}
++		for (unsigned i = 0; i < n; ++i) {
++			touch_stfts_log("boot event", ev + i * STFTS_EVT_SIZE);
++			if (ev[i * STFTS_EVT_SIZE] == STFTS_EVT_READY) {
++				ready = true;
++			}
++		}
++	}
++	st.probing = false;
++	if (!ready) {
++		printf("SWEET TOUCH: fts no CONTROLLER_READY after reset; stopping\n");
++		return false;
++	}
++	const uint8_t sense_on[3] = {0xa0, 0x00, 0x01};
++	int err = touch_msg(STFTS_ADDR, sense_on, sizeof(sense_on), NULL, 0, false);
++	printf("SWEET TOUCH: fts sense on err=%d\n", err);
++	return err == 0;
++}
++
++static int
++touch_stfts(void)
++{
++	uint8_t ev[STFTS_EVT_SIZE * 32];
++	unsigned n = 0;
++	int err = touch_stfts_read(ev, 32, &n);
++	if (err) {
++		return err;
++	}
++	if (!n) {
++		return 0;
++	}
++	uint32_t mask = st.active;
++	int x[TOUCH_MAX], y[TOUCH_MAX];
++	for (unsigned id = 0; id < TOUCH_MAX; ++id) {
++		x[id] = st.x[id];
++		y[id] = st.y[id];
++	}
++	for (unsigned i = 0; i < n; ++i) {
++		const uint8_t *e = ev + i * STFTS_EVT_SIZE;
++		unsigned id = e[1] >> 4;
++		switch (e[0]) {
++		case STFTS_EVT_ENTER:
++		case STFTS_EVT_MOTION: {
++			unsigned px = ((unsigned)(e[3] & 15u) << 8) | e[2];
++			unsigned py = ((unsigned)e[4] << 4) | (e[3] >> 4);
++			if (id >= TOUCH_MAX) {
++				touch_stfts_log("bad id", e);
++				continue;
++			}
++			x[id] = (int)(px > STFTS_X_MAX ? STFTS_X_MAX : px);
++			y[id] = (int)(py > STFTS_Y_MAX ? STFTS_Y_MAX : py);
++			mask |= 1u << id;
++			break;
++		}
++		case STFTS_EVT_LEAVE:
++			if (id < TOUCH_MAX) {
++				mask &= ~(1u << id);
++			}
++			break;
++		case STFTS_EVT_READY:
++			/* FW reset itself (ESD/watchdog): sensing is off again. */
++			touch_stfts_log("unexpected ready", e);
++			mask = 0;
++			{
++				const uint8_t sense_on[3] = {0xa0, 0x00, 0x01};
++				(void)touch_msg(STFTS_ADDR, sense_on, sizeof(sense_on), NULL, 0, false);
++			}
++			break;
++		case STFTS_EVT_ERROR:
++			touch_stfts_log("error", e);
++			break;
++		default:
++			break; /* status/user/debug events */
++		}
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
+ static bool
+ touch_se_init(void)
+ {
+@@ -569,6 +740,33 @@
+ 	if (!touch_clocks() || !touch_se_init()) {
+ 		goto out;
+ 	}
++	if (st.stfts) {
++		printf("SWEET TOUCH: ST FTS path (toco): TLMM reset=%#x irq=%#x vdd72=%#x; voting L6C\n",
++		    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
++		    touch_rd(st.gpio, TOUCH_GPIO_IO(72)));
++		if (!touch_stfts_start()) {
++			goto out;
++		}
++		st.kind = TOUCH_STFTS;
++		printf("SWEET TOUCH: selected ST FTS @0x49, 1080x2340, poll=10ms\n");
++		unsigned fts_errors = 0;
++		while (!st.dead) {
++			int err = touch_stfts();
++			if (err) {
++				if ((fts_errors++ % 100u) == 0) {
++					printf("SWEET TOUCH: fts report err=%d irq=%#x\n", err, st.irq_status);
++				}
++				if (fts_errors == 10) {
++					touch_report(0, st.x, st.y);
++				}
++			} else {
++				fts_errors = 0;
++			}
++			touch_wait(10);
++		}
++		touch_report(0, st.x, st.y);
++		goto out;
++	}
+ 	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x vdd90=%#x; voting L11C through RPMh\n",
+ 	    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
+ 	    touch_rd(st.gpio, TOUCH_GPIO_IO(90)));
+@@ -646,6 +844,7 @@
+ 	st.started = true;
+ 	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
+ 	(void)PE_parse_boot_argn("sweettouchirq", &st.irq_hint, sizeof(st.irq_hint));
++	(void)PE_parse_boot_argn("sweettouchfts", &st.stfts, sizeof(st.stfts));
+ 	if (!enabled) {
+ 		printf("SWEET TOUCH: disabled (sweettouch=0)\n");
+ 		return;
