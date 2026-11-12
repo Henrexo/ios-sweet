@@ -136,8 +136,16 @@ Consequences:
   (sha 2bebd50a…, verified identical to device before the write). TWRP (recovery partition) untouched.
 - 23:23:31 boot of shim-boot-toco5.img (touch 0082, sweettouchfts=1) from boot partition.
 
+## MILESTONE: TOUCH WORKS on toco (boot 6, 2026-11-12 23:39:42, user report "TOUCH GEHT!!!") [obs]
+- Boot 5 log (logs/toco-boot5.txt): every FTS transfer NACKed (err=6 ENXIO) and `vdd72=0`: the touch vdd
+  (TLMM GPIO72 fixed regulator) is OFF after ABL, not shared panel power as assumed.
+- Fix in 0082: drive GPIO72 high (2 mA push-pull), wait 10 ms, then L6C 3000 mV, reset, CONTROLLER_READY, sense on.
+  CI run 43320211676 (xnu/out-0082b), image shim/out/shim-boot-toco6.img (sweettouchfts=1), booted from the
+  boot partition (written from TWRP). Lock screen -> swipe up works.
+- Boot args for toco now: README full args minus sweettouch=0, plus `sweettouchfts=1`.
+
 ## Next
-1. Touch (in progress, see above): ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
+1. ~~Touch~~ DONE (0082). Old notes: ST FTS (FTM5) driver on GENI I2C SE7 @0x49, IRQ TLMM GPIO9, reset GPIO8, rails GPIO72 + L6C (patch 0063 is Goodix).
 2. Panel height from ADT in 0061/0058 (2340).
 3. Optional: RTC (PM6150 RTC over SPMI) for the clock.
 
